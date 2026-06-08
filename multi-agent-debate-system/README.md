@@ -1,45 +1,76 @@
-# Multi-Agent Debate System
+# Multi-Agent Debate System — a Courtroom Proceeding
 
-Three local LLM agents debate a technical decision and produce a structured,
-nuanced verdict. A **Proposer** argues *for*, an **Opposer** argues *against*, and
-a **Judge** steers each round and synthesises a final recommendation with explicit
-conditions and dissent. Built on **LangGraph** with **local Ollama models only** —
-no API keys, no cloud, no tools.
+A technical decision is put **on trial**. Three local reasoning agents — **each
+from a different lab** — argue it out as a court: **Defence counsel** argues _for_
+the proposition, **Prosecution counsel** argues _against_, and the **Judge**
+presides — directing each round of cross-examination and finally delivering an
+**advisory opinion** (a strong recommendation, _not_ a binding winner-takes-all
+verdict — the reader is the final decision-maker). Built on **LangGraph** with
+**local Ollama models only** — no API keys, no cloud, no tools.
 
-> Adversarial coordination, persistent conflicting objectives, multi-round state,
+> Adversarial coordination, persistent conflicting objectives, multi-phase state,
 > and synthesis from conflicting inputs. See [`docs/DESIGN.md`](docs/DESIGN.md) and
 > [`docs/TECHNICAL_DEEP_DIVE.md`](docs/TECHNICAL_DEEP_DIVE.md).
 
 ## How it works
 
 ```
-START → proposer → opposer → judge_observe → [route]
-                                                ├─ more rounds → proposer (loop)
-                                                └─ last round  → judge_verdict → END
+frame → defence_opening → prosecution_opening → judge_direct ─┐
+                                                              │ (route_examination)
+        ┌─ round ≤ max ── defence_examine → prosecution_examine ┘
+        │                          │
+        │                    judge_direct  (loop)
+        └─ else → defence_closing → prosecution_closing → verdict → END
 ```
 
-Each round: Proposer argues → Opposer rebuts → Judge observes what's missing and
-steers the next round. After the final round (2 or 3) the Judge produces a
-`Verdict { recommendation, confidence, key_factors, conditions, dissenting_considerations }`.
+The proceeding runs in four phases:
 
-## Three models, one per role
+1. **Opening statements** — each counsel lays out its case.
+2. **Cross-examination** — each round, both counsel answer the opponent's last
+   question, rebut, advance a new argument, and put one pointed question back. The
+   **Judge directs each round** toward dimensions still unaddressed (Decision 4).
+3. **Closing statements** — each counsel sums up the record.
+4. **The Judge's advisory opinion** — `Verdict { recommendation, confidence,
+grounds, why_alternative_is_weaker, conditions, dissenting_considerations }`:
+   _"I suggest A on these grounds (XYZ); the alternative B is likely weaker for
+   these reasons (LMN); here is when B is the better call instead — but you decide."_
 
-| Role | Default | Why |
-|------|---------|-----|
-| Proposer | `llama3.1:latest` | assertive advocate |
-| Opposer | `qwen2.5:7b` | different model family → genuine disagreement, not an echo |
-| Judge | `qwen3:8b` (thinking) | the only reasoning model → deep synthesis |
+**Framing (Decision 2 fix):** before opening, a one-shot call derives the two
+explicit, mutually-exclusive positions counsel defend (e.g. _"build in-house"_ vs
+_"use Auth0"_). Relying on the words "for/against the proposition" silently
+collapses for an _"A or B"_ question — it has no single proposition, so two helpful
+models both drift to the conventionally-correct answer. Pinning each side of the
+bar to a concrete assigned stance, plus an explicit **anti-defection clause** in
+the advocate prompt, is what keeps the proceeding genuinely adversarial across many
+rounds (reasoning models otherwise tend to "reason toward the conventional answer"
+and quietly switch sides). Framing degrades to generic stances if the call fails.
 
-Heterogeneous families are a deliberate defence against the failure mode where two
-identical helpful models converge on the same answer.
+## Three reasoning models — one per role, each from a different lab
+
+| Role        | Default                | Lab      | Why                                                   |
+| ----------- | ---------------------- | -------- | ----------------------------------------------------- |
+| Defence     | `gpt-oss:20b`          | OpenAI   | reasoning advocate                                    |
+| Prosecution | `deepseek-r1:14b`      | DeepSeek | reasoning advocate, different lab → real disagreement |
+| Judge       | `qwen3:32b` (thinking) | Alibaba  | the bench — strongest model on the hardest job        |
+
+**No two roles share a provider.** Three different labs' training is the strong
+form of the Decision-2 defence against convergence: it makes genuine disagreement
+far more likely than one model family talking to itself. Every role _reasons_
+(thinks) before it speaks (`advocate_think` / `enable_thinking`), which is what
+makes a deep proceeding substantive rather than three models pattern-matching.
+
+> On the reference 48 GB GPU the 32B judge stays resident while the two ~13 GB
+> counsel alternate (judge + both + KV cache slightly exceed VRAM at 16k context),
+> so only the counsel incur a per-turn reload. Use the `:14b` judge or
+> `--single-model` to remove swaps on smaller hardware.
 
 ## Setup
 
 ```bash
 # 1. Ollama running, with the three models pulled:
-ollama pull llama3.1
-ollama pull qwen2.5:7b
-ollama pull qwen3:8b
+ollama pull gpt-oss:20b
+ollama pull deepseek-r1:14b
+ollama pull qwen3:32b
 
 # 2. Deps:
 pip install -r requirements.txt
@@ -48,21 +79,22 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-# Default: 3 rounds, three models, hybrid history, live trace
+# Default: 6 cross-examination rounds, three reasoning models, hybrid history
 python main.py "Should a startup with 50k DAU build auth in-house or use Auth0?"
 
-# Faster: 2 rounds, one model for all roles
-python main.py --rounds 2 --single-model qwen3:8b "..."
+# Shallower / faster, or one model for all roles
+python main.py --rounds 3 "..."
+python main.py --rounds 2 --single-model qwen3:32b "..."
 
-# A/B the brief's history decision
-python main.py --history full "..."     # full transcript every round
-python main.py --history last "..."     # opponent's last argument only
+# A/B the history decision
+python main.py --history full "..."     # full record every round
+python main.py --history last "..."     # opponent's last turn only
 
-# Machine-readable verdict
+# Machine-readable opinion
 python main.py --json "..."
 ```
 
-Per-role overrides: `--proposer-model`, `--opposer-model`, `--judge-model`.
+Per-role overrides: `--defence-model`, `--prosecution-model`, `--judge-model`.
 
 ## Evaluate
 
@@ -77,7 +109,7 @@ quality is subjective; the rubric defines it before you run.
 ## Test
 
 ```bash
-python -m pytest            # runs the whole graph against a FakeLLM, no models needed
+python -m pytest            # runs the whole proceeding against a FakeLLM, no models
 ```
 
 ## Layout
@@ -86,12 +118,12 @@ python -m pytest            # runs the whole graph against a FakeLLM, no models 
 main.py                CLI entry
 src/debate/
   config.py            per-role models + reliability tunables
-  schemas.py           Pydantic models + LangGraph DebateState
+  schemas.py           Pydantic wire schemas + LangGraph DebateState (court record)
   llm.py               Ollama wrapper: json/think/timeout/validation-retry
-  prompts.py           role-commitment prompts + history-mode builders
-  agents.py            proposer / opposer / judge nodes (client injected for tests)
-  graph.py             StateGraph wiring + routing
-  runner.py            run_debate(), preflight, trace, degradation
+  prompts.py           framing + advocate contract + per-phase builders + judge
+  agents.py            opening / examination / closing / judge nodes (DI for tests)
+  graph.py             StateGraph wiring + examination routing
+  runner.py            run_debate(), framing, preflight, trace, advisory opinion
 eval/                  question battery, harness, manual rubric
 tests/                 schemas / parsing / graph (FakeLLM)
 docs/                  DESIGN.md, TECHNICAL_DEEP_DIVE.md
@@ -99,8 +131,17 @@ docs/                  DESIGN.md, TECHNICAL_DEEP_DIVE.md
 
 ## Notes
 
-- On a 4 GB GPU only one ~8B model is resident at a time, so Ollama swaps models
-  per turn (a few seconds each). Fine for a non-real-time batch debate;
-  `--single-model` avoids swaps.
+- On the 48 GB reference GPU the 32B judge stays resident and the two ~13 GB
+  counsel alternate (the three + KV cache slightly exceed VRAM at 16k context), so
+  only the counsel reload per turn. On a small GPU everything swaps — slower but
+  fine for a batch proceeding; `--single-model` avoids swaps entirely.
+- Reasoning models think before answering, and that hidden trace counts against
+  `num_predict` — hence the large per-call token budgets in `config.py`. A budget
+  too small truncates the model mid-thought and leaves no room for the JSON answer.
 - Every agent output is grammar-constrained (`format=<schema>`) and Pydantic-
-  validated; failures degrade to a labelled partial rather than crashing.
+  validated; failures degrade to a labelled partial rather than crashing — the
+  proceeding always reaches an opinion.
+- The opinion is **advisory**: a strong recommendation with grounds and the
+  conditions under which the alternative is better, not a binding ruling. You decide.
+
+refer f9r models - https://www.siliconflow.com/articles/en/best-open-source-LLMs-for-reasoning

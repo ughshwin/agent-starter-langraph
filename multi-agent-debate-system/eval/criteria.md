@@ -1,36 +1,39 @@
-# Debate Evaluation Criteria (brief Decision 5)
+# Proceeding Evaluation Criteria (brief Decision 5)
 
-Debate quality is subjective, so define it before running. Score each debate
-output against these criteria **manually** — there is no automatic grader.
+Quality is subjective, so define it before running. Score each proceeding's output
+against these criteria **manually** — there is no automatic grader.
 
 ## Criteria
 
 For each question, score 1–5 on each axis:
 
-1. **Role commitment** — Did Proposer and Opposer each fully argue their assigned
-   side without conceding or drifting into "both sides have a point"? (The most
-   common failure: two helpful models converging.)
+1. **Role commitment** — Did Defence and Prosecution each fully argue their assigned
+   side across *every* phase (opening, examination, closing) without conceding,
+   drifting into "both sides have a point", or switching sides? (The most common
+   failure: helpful reasoning models converging or defecting over many rounds.)
 
-2. **Direct engagement** — From round 2 on, did each side actually rebut the
-   opponent's *strongest* specific points (visible in `rebuttals_to`), rather than
-   ignoring them and restating its own case?
+2. **Direct engagement** — In cross-examination, did each side actually answer the
+   opponent's pointed question and rebut their *strongest* specific points (visible
+   in `rebuttals_to` / `question_to_opponent`), rather than ignoring them?
 
 3. **Internal consistency** — Is each side's position coherent across rounds — no
    self-contradiction, no abandoning earlier claims?
 
-4. **Active Judge** — Did the Judge's per-round observations steer the next round
+4. **Active Judge** — Did the bench's per-round directions steer the next round
    toward genuinely unaddressed dimensions (operational complexity, migration
-   risk, security, team capability), and did the debate actually shift in response?
+   risk, security, team capability), and did the proceeding shift in response?
 
-5. **Decision usefulness (the real test)** — Reading the final `Verdict`, would a
+5. **Decision usefulness (the real test)** — Reading the advisory `Verdict`, would a
    senior engineer say "this is actually useful for making the decision"? In
-   particular: are the `conditions` specific enough to tell you *when* each choice
-   is correct, and are the `dissenting_considerations` real (not boilerplate)?
+   particular: is the recommendation appropriately *advisory* (strong but not
+   absolute); are the `grounds` and `why_alternative_is_weaker` specific; are the
+   `conditions` precise enough to tell you *when* the alternative wins; and are the
+   `dissenting_considerations` real (not boilerplate)?
 
 ## Pass bar
 
-A debate "passes" if criteria 1, 2, and 5 are all ≥ 4. Criterion 5 is the one that
-matters most — a structurally perfect debate with a useless verdict fails.
+A proceeding "passes" if criteria 1, 2, and 5 are all ≥ 4. Criterion 5 is the one
+that matters most — a structurally perfect proceeding with a useless opinion fails.
 
 ## Recording results
 

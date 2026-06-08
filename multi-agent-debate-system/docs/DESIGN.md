@@ -1,122 +1,159 @@
-# Multi-Agent Debate System — Design Spec
+# Multi-Agent Debate System — Design Spec (Courtroom Proceeding)
 
 ## Purpose
 
-Given a technical decision framed as a question, run an adversarial debate between
-three agents and produce a structured, nuanced verdict a senior engineer would
-find genuinely useful for making the decision.
+Given a technical decision framed as a question, put it **on trial**: run an
+adversarial proceeding between three agents and produce a structured, advisory
+opinion a senior engineer would find genuinely useful for making the decision.
 
-- **Proposer** — argues *for* the position.
-- **Opposer** — argues *against* it.
-- **Judge** — steers the debate each round and synthesises a final verdict.
+- **Defence counsel** — argues *for* the proposition.
+- **Prosecution counsel** — argues *against* it.
+- **Judge** — presides: directs each round of cross-examination, then delivers an
+  *advisory opinion* (a strong recommendation, not a binding winner declaration —
+  the reader is the final decision-maker).
 
 This is a pure reasoning exercise: **no tools, no retrieval, no human in the loop,
 no streaming.** The learning target is adversarial coordination, persistent
-conflicting objectives, multi-round state management, and synthesis.
+conflicting objectives, multi-phase state management, and synthesis.
 
 ## Non-goals (from brief)
 
-No real-time streaming, no mid-debate human input, max 3 rounds, no external tool
-use, not an information-retrieval task.
+No real-time streaming, no mid-proceeding human input, no external tool use, not an
+information-retrieval task. (The brief's original 3-round cap has been lifted on
+request — see "Round count" below; min 2, max 20.)
 
 ## Orchestration — LangGraph state machine
 
 ```
-START → proposer → opposer → judge_observe → [route_round]
-                                                  ├─ more rounds → proposer  (loop)
-                                                  └─ last round  → judge_verdict → END
+frame → defence_opening → prosecution_opening → judge_direct ─┐
+                                                              │ (route_examination)
+        ┌─ round ≤ max ── defence_examine → prosecution_examine ┘
+        │                          │
+        │                    judge_direct  (loop)
+        └─ else → defence_closing → prosecution_closing → verdict → END
 ```
 
-- **Nodes:** `proposer`, `opposer`, `judge_observe` (per-round steering), and
-  `judge_verdict` (final synthesis).
-- **Conditional edge** `route_round` reads the round counter — termination, the
-  hardest part of multi-agent design, is made explicit and unmissable here.
-- Rounds: min 2, max 3 (configurable `--rounds`, default 3).
+The proceeding has four phases: **opening statements → cross-examination →
+closing statements → advisory opinion.**
 
-Per round: Proposer argues → Opposer rebuts → Judge observes what is missing and
-injects a steering directive used by the next round. After the final round the
-Judge synthesises the `Verdict`.
+- **Framing (pre-proceeding, in `runner.frame_debate`):** derives the two explicit,
+  mutually-exclusive positions counsel defend, so an "A or B" question (which has no
+  single "proposition") still pins each side to a concrete opposite stance. See
+  Decision 2. Degrades to generic stances if the call fails.
+- **Nodes:** `defence_opening` / `prosecution_opening`, `defence_examine` /
+  `prosecution_examine`, `judge_direct` (per-round bench direction + round
+  counter), `defence_closing` / `prosecution_closing`, `verdict`.
+- **Hub + conditional edge.** `judge_direct` is the hub: it directs the next round,
+  increments the examination counter, and `route_examination` reads that counter to
+  loop or move to closing — termination, the hardest part of multi-agent design,
+  made explicit in one place. The counter starts at 0; the first `judge_direct`
+  (after openings) advances it to 1, so exactly `max_rounds` rounds run.
+- **Round count:** min 2, max 20, default 6 cross-examination rounds (`--rounds`).
+  `recursion_limit` scales as `4*max_rounds + 20`.
 
-## Three models, one per role (heterogeneous by design)
+Each examination round: each counsel answers the opponent's last question, rebuts,
+advances a NEW argument, and puts one pointed question back; the Judge then directs
+what the next round must cover. After closing statements the Judge delivers the
+advisory `Verdict`.
 
-| Role | Default model | Rationale |
-|------|---------------|-----------|
-| Proposer | `llama3.1:latest` | assertive advocate |
-| Opposer  | `qwen2.5:7b`      | different family → genuine disagreement, not an echo |
-| Judge    | `qwen3:8b` (thinking mode) | only reasoning model → deep synthesis where it matters |
+## Three reasoning models, one per role — each from a different lab
 
-Using **different model families** is itself a defence against the failure mode
-where two same-model agents converge (brief Decision 2): different training
-distributions produce genuinely different positions. The Judge gets the single
-strongest reasoning model because synthesis is the hardest capability.
+| Role | Default model | Lab | Rationale |
+|------|---------------|-----|-----------|
+| Defence | `gpt-oss:20b`     | OpenAI   | reasoning advocate |
+| Prosecution | `deepseek-r1:14b` | DeepSeek | reasoning advocate, different lab → genuine disagreement |
+| Judge    | `qwen3:32b` (thinking) | Alibaba | the bench — largest model on the hardest job |
 
-Only one ~8B model fits the 4 GB GPU at a time, so Ollama swaps models per turn
-(a few seconds of reload). Acceptable for a non-real-time batch debate;
-`--single-model M` collapses all three roles onto one model for speed.
+Using models from **three different labs** is the strong form of the Decision-2
+defence against convergence: different training distributions produce genuinely
+different positions, far more so than two checkpoints of one family. Every role is
+a *reasoning* model and thinks before speaking (`advocate_think`,
+`enable_thinking`), which is what makes a deep proceeding substantive.
+The Judge gets the largest model because synthesis is the hardest capability.
+
+On the reference 48 GB GPU the 32B judge stays resident and the two ~13 GB counsel
+alternate (judge + both counsel + KV cache slightly exceed VRAM at 16k context), so
+only the counsel incur a per-turn reload — the judge never swaps. On a small GPU
+everything swaps; `--single-model M` collapses all three roles onto one model.
 
 ## The brief's five decisions — how this design answers them
 
-1. **History exposure (hybrid).** Round 1 sends the full debate so far; rounds
-   2–3 send only the opponent's last argument plus the Judge's steering. Coherent
-   opening, dynamic direct engagement after. Configurable: `hybrid|full|last`.
-2. **Preventing agreement (role commitment + heterogeneity).** Each agent's
-   system prompt orders it to steelman its assigned side regardless of personal
-   assessment. Reinforced by different model families per side.
-3. **A useful Judge (forced structure).** The `Verdict` schema forces the Judge
-   to name strongest/weakest arguments, underlying assumptions, and — most
-   importantly — the `conditions` under which each side is correct. A verdict that
-   "averages" is treated as a failure.
-4. **Active Judge (per-round steering).** After each round the Judge writes an
-   observation that names unaddressed dimensions (e.g. operational complexity)
-   and is injected into the next round's prompts. The Judge participates, not
-   just evaluates.
+1. **History exposure (hybrid).** The first examination round sends the full court
+   record; later rounds send only the opponent's last turn plus the bench's
+   direction. Coherent opening, dynamic direct engagement after, and bounded
+   context that does not explode across rounds. Configurable: `hybrid|full|last`.
+2. **Preventing agreement (explicit positions + anti-defection + different labs).**
+   A pre-proceeding framing step assigns each counsel a concrete, mutually-exclusive
+   position (the fix for "A or B" questions that have no single proposition, where
+   two helpful models otherwise both drift to the conventional answer). The advocate
+   contract then orders each counsel to steelman its *assigned* position and
+   *explicitly forbids defection* — observed empirically: over a long debate a
+   reasoning model otherwise reasons toward the conventional answer and switches
+   sides. Reinforced by using three different labs' models.
+3. **A useful Judge (forced structure).** The `Verdict` schema forces the Judge to
+   name the `grounds`, where the alternative is weaker, and — most importantly — the
+   `conditions` under which the alternative is the better choice. An opinion that
+   "averages" is treated as a failure; so is one that declares an absolute winner —
+   it must be advisory.
+4. **Active Judge (presiding).** The Judge `judge_direct`s before each examination
+   round, naming unaddressed dimensions (operational complexity, migration risk,
+   security, team capability), injected into the next round. The Judge runs the
+   proceeding, not just scores it.
 5. **Evaluation (manual rubric).** `eval/` runs ≥3 technical questions and scores
-   each output against `eval/criteria.md`: internal consistency, direct
-   engagement with the opponent's strongest points, and decision-usefulness.
+   each output against `eval/criteria.md`: role commitment, direct engagement with
+   the opponent's strongest points, internal consistency, active judge, and
+   decision-usefulness.
 
 ## State
 
 ```python
 class DebateState(TypedDict):
     question: str
-    round: int                                   # current round, 1-based
-    max_rounds: int
+    defence_position: str                        # explicit stance set at framing
+    prosecution_position: str                    # explicit opposite stance
+    round: int                                   # examination round (0 before it opens)
+    max_rounds: int                              # number of cross-examination rounds
     history_mode: str                            # hybrid | full | last
-    proposer_arguments: Annotated[list[RoundArgument], add]
-    opposer_arguments:  Annotated[list[RoundArgument], add]
-    judge_observations: Annotated[list[str], add]
-    final_verdict: Verdict | None
+    record: Annotated[list[CourtRecordEntry], add]   # the full court transcript
+    judge_directions: Annotated[list[str], add]      # the bench's per-round directions
+    final_verdict: Verdict | None                    # the advisory opinion
 ```
 
-Reducer-based list fields let each node return only its new item; LangGraph
-accumulates. The `round` counter is incremented in `judge_observe`; `route_round`
-reads it to loop or finish.
+The reducer on `record` lets each node return only its new entry; LangGraph
+accumulates the full transcript. The `round` counter is incremented in
+`judge_direct`; `route_examination` reads it to loop or move to closing.
 
 ## Structured output (reliability core)
 
 Every agent output is constrained with Ollama's `format=<json-schema>` and
-validated with Pydantic — the debate analog of the research agent's tool-call
-recovery problem, solved at the decode layer instead of by post-hoc parsing.
+validated with Pydantic — solved at the decode layer instead of by post-hoc
+parsing.
 
-- Proposer / Opposer → `ArgumentPayload {argument, rebuttals_to}` (round attached
-  in code).
-- Judge verdict → `Verdict` with `think=True` (reasoning in `message.thinking`,
-  final answer grammar-constrained to the schema).
-- Judge observation → free text with `think=True`.
+- Framing → `DebateFraming {defence_position, prosecution_position}`.
+- Opening / closing → `Statement {statement, key_points}` with `think=True`.
+- Cross-examination → `ExaminationTurn {response, question_to_opponent,
+  rebuttals_to}` with `think=True` (round attached in code; reasoning trace in
+  `message.thinking`, JSON answer grammar-constrained to the schema).
+- Judge opinion → `Verdict` with `think=True`.
+- Bench direction → free text with `think=True`.
+
+Because the reasoning trace counts against `num_predict`, the per-call token
+budgets are large (counsel 4000, opinion 6000) — a small cap would truncate the
+model mid-thought, leaving no tokens for the JSON answer.
 
 On a validation failure the client retries with the error fed back, then falls
-back to lenient JSON extraction; the runner degrades to a labelled partial
-verdict rather than crashing.
+back to lenient JSON extraction; the runner degrades to a labelled partial entry or
+opinion rather than crashing.
 
 ## Reliability features (carried from the research-agent experience)
 
 - Per-LLM-call timeout (only thing that stops a hung generation).
 - Validation-retry with error feedback; lenient JSON extraction fallback.
-- `num_predict` caps per role (large for the thinking Judge, small for advocates).
+- `num_predict` caps per role, all sized to hold the reasoning trace + the answer.
 - History bounding so context can't explode across rounds.
-- Graceful degradation to `[INCOMPLETE]` labelled verdict on repeated failure.
+- Graceful degradation to a labelled `[INCOMPLETE]` opinion on repeated failure.
 - Preflight: Ollama reachable and every role model pulled, with a fix hint.
-- UTF-8 stdout; live reasoning trace (ROUND / PROPOSER / OPPOSER / JUDGE).
+- UTF-8 stdout; live trace (PHASE / ROUND / DEFENCE / PROSECUTION / JUDGE).
 
 ## Layout
 
@@ -126,12 +163,12 @@ multi-agent-debate-system/
   requirements.txt
   src/debate/
     config.py              Settings, per-role models, tunables
-    schemas.py             Pydantic models + DebateState
+    schemas.py             Pydantic wire schemas + DebateState (court record)
     llm.py                 Ollama client wrapper (json/think/timeout/retry)
-    prompts.py             role-commitment prompts + history builders
-    agents.py              proposer / opposer / judge node factory (DI for tests)
-    graph.py               StateGraph wiring + routing
-    runner.py              run_debate(), trace logging, degradation
+    prompts.py             framing + advocate contract + per-phase builders + judge
+    agents.py              opening / examination / closing / judge node factory (DI)
+    graph.py               StateGraph wiring + examination routing
+    runner.py              run_debate(), framing, trace, advisory opinion
   eval/
     questions.py           ≥3 technical decision questions
     run_eval.py            batch harness

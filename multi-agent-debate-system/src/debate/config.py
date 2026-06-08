@@ -8,38 +8,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-# One model per role. Different families on the two sides make genuine
-# disagreement more likely (brief Decision 2); the reasoning model is the Judge's.
-DEFAULT_PROPOSER_MODEL = "llama3.1:latest"
-DEFAULT_OPPOSER_MODEL = "qwen2.5:7b"
-DEFAULT_JUDGE_MODEL = "qwen3:8b"  # thinking model
+# One reasoning model per role, each from a DIFFERENT lab — no two share a provider.
+# Three different labs' training makes genuine disagreement far more likely than one
+# family talking to itself, and every role reasons (thinks) before it speaks.
+DEFAULT_DEFENCE_MODEL = "gpt-oss:20b"        # OpenAI   — Defence counsel
+DEFAULT_PROSECUTION_MODEL = "deepseek-r1:14b"  # DeepSeek — Prosecution counsel
+DEFAULT_JUDGE_MODEL = "qwen3:32b"            # Alibaba  — the bench (strongest model)
 
 HISTORY_MODES = ("hybrid", "full", "last")
+
+# Upper bound on rounds. The brief capped this at 3; we lift it for deep internal
+# debate. Kept finite so a bad --rounds value can't run forever.
+MAX_ROUNDS_LIMIT = 20
 
 
 @dataclass(frozen=True)
 class Settings:
-    proposer_model: str = DEFAULT_PROPOSER_MODEL
-    opposer_model: str = DEFAULT_OPPOSER_MODEL
+    defence_model: str = DEFAULT_DEFENCE_MODEL
+    prosecution_model: str = DEFAULT_PROSECUTION_MODEL
     judge_model: str = DEFAULT_JUDGE_MODEL
 
-    max_rounds: int = 3  # brief: max 3, min 2
+    max_rounds: int = 6  # cross-examination rounds; min 2, max MAX_ROUNDS_LIMIT
     history_mode: str = "hybrid"
 
-    # Whether the Judge uses thinking mode. Turn OFF when the judge model is not a
-    # thinking model (e.g. qwen2.5) — avoids a wasted failed call per Judge turn.
+    # Whether the Judge uses thinking mode. Keep ON for reasoning judges (qwen3,
+    # deepseek-r1, gpt-oss); turn OFF only for a non-thinking judge model.
     enable_thinking: bool = True
 
-    # Per-call generation caps. The thinking Judge needs room for its reasoning
-    # trace plus the verdict; advocates only need a paragraph + rebuttal points.
-    advocate_num_predict: int = 900
-    judge_observe_num_predict: int = 1200
-    judge_verdict_num_predict: int = 3000
+    # Whether the two ADVOCATES also reason before answering. ON by default now that
+    # every role is a reasoning model — this is what makes the debate "deep" rather
+    # than three models pattern-matching. Set OFF for plain models to save tokens.
+    advocate_think: bool = True
 
-    # Per-LLM-call timeout (seconds). The only thing that stops a hung generation
-    # on a CPU/GPU split. The Judge (thinking) gets a longer budget.
-    advocate_timeout: float = 240.0
-    judge_timeout: float = 420.0
+    # Per-call generation caps. NOTE: with reasoning models the hidden thinking trace
+    # counts against num_predict, so these are deliberately large — a small cap would
+    # truncate the model mid-thought and leave no room for the JSON answer.
+    advocate_num_predict: int = 4000
+    judge_direct_num_predict: int = 3000
+    judge_verdict_num_predict: int = 6000
+
+    # Per-LLM-call timeout (seconds). The only thing that stops a hung generation.
+    # Reasoning models think for a while, so the budgets are generous.
+    advocate_timeout: float = 600.0
+    judge_timeout: float = 900.0
 
     # How many times to re-ask a model whose output fails schema validation,
     # feeding the error back each time before giving up.
@@ -49,15 +60,15 @@ class Settings:
 
     def models(self) -> dict[str, str]:
         return {
-            "proposer": self.proposer_model,
-            "opposer": self.opposer_model,
+            "defence": self.defence_model,
+            "prosecution": self.prosecution_model,
             "judge": self.judge_model,
         }
 
     def with_single_model(self, model: str) -> "Settings":
         """Collapse all three roles onto one model (speed over heterogeneity)."""
         return replace(
-            self, proposer_model=model, opposer_model=model, judge_model=model
+            self, defence_model=model, prosecution_model=model, judge_model=model
         )
 
     def validate(self) -> None:
@@ -65,5 +76,8 @@ class Settings:
             raise ValueError(
                 f"history_mode must be one of {HISTORY_MODES}, got {self.history_mode!r}"
             )
-        if not (2 <= self.max_rounds <= 3):
-            raise ValueError(f"max_rounds must be 2 or 3, got {self.max_rounds}")
+        if not (2 <= self.max_rounds <= MAX_ROUNDS_LIMIT):
+            raise ValueError(
+                f"max_rounds must be between 2 and {MAX_ROUNDS_LIMIT}, "
+                f"got {self.max_rounds}"
+            )

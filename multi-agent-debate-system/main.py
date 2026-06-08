@@ -1,12 +1,14 @@
-"""CLI entry point for the multi-agent debate system.
+"""CLI entry point for the courtroom proceeding.
 
     python main.py "Should a startup with 50k DAU build auth in-house or use Auth0?"
-    python main.py --rounds 2 --history full "..."
-    python main.py --single-model qwen3:8b "..."        # one model for all roles
-    python main.py --json "..."                          # machine-readable verdict
+    python main.py --rounds 3 --history full "..."
+    python main.py --single-model qwen3:32b "..."       # one model for all roles
+    python main.py --json "..."                          # machine-readable opinion
 
-Options let you A/B the brief's decisions: --history {hybrid,full,last} and the
-per-role --proposer-model / --opposer-model / --judge-model.
+The proceeding runs: opening statements → cross-examination (Judge directs each
+round) → closing statements → the Judge's advisory opinion. Options:
+--history {hybrid,full,last} and per-role --defence-model / --prosecution-model /
+--judge-model.
 """
 
 from __future__ import annotations
@@ -27,9 +29,9 @@ for _stream in (sys.stdout, sys.stderr):
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from debate.config import (  # noqa: E402
+    DEFAULT_DEFENCE_MODEL,
     DEFAULT_JUDGE_MODEL,
-    DEFAULT_OPPOSER_MODEL,
-    DEFAULT_PROPOSER_MODEL,
+    DEFAULT_PROSECUTION_MODEL,
     Settings,
 )
 from debate.runner import preflight, print_summary, run_debate  # noqa: E402
@@ -37,8 +39,8 @@ from debate.runner import preflight, print_summary, run_debate  # noqa: E402
 
 def build_settings(args) -> Settings:
     settings = Settings(
-        proposer_model=args.proposer_model,
-        opposer_model=args.opposer_model,
+        defence_model=args.defence_model,
+        prosecution_model=args.prosecution_model,
         judge_model=args.judge_model,
         max_rounds=args.rounds,
         history_mode=args.history,
@@ -51,14 +53,18 @@ def build_settings(args) -> Settings:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Multi-agent adversarial debate system.")
-    p.add_argument("question", nargs="*", help="The technical decision to debate.")
-    p.add_argument("--proposer-model", default=DEFAULT_PROPOSER_MODEL)
-    p.add_argument("--opposer-model", default=DEFAULT_OPPOSER_MODEL)
+    p = argparse.ArgumentParser(
+        description="Courtroom proceeding over a technical decision: Defence vs "
+        "Prosecution, presided by a Judge who delivers an advisory opinion."
+    )
+    p.add_argument("question", nargs="*", help="The technical decision to put on trial.")
+    p.add_argument("--defence-model", default=DEFAULT_DEFENCE_MODEL)
+    p.add_argument("--prosecution-model", default=DEFAULT_PROSECUTION_MODEL)
     p.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
     p.add_argument("--single-model", default=None,
                    help="Use one model for all three roles (overrides per-role).")
-    p.add_argument("--rounds", type=int, default=3, help="Debate rounds (2 or 3).")
+    p.add_argument("--rounds", type=int, default=6,
+                   help="Cross-examination rounds (2..20).")
     p.add_argument("--history", default="hybrid", choices=("hybrid", "full", "last"))
     p.add_argument("--no-think", action="store_true",
                    help="Disable Judge thinking mode (use for non-thinking models).")

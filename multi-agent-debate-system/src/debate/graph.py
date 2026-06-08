@@ -1,14 +1,20 @@
-"""LangGraph wiring.
+"""LangGraph wiring for the courtroom proceeding.
 
 ```
-START → proposer → opposer → judge_observe → [route_round]
-                                                ├─ round ≤ max → proposer  (loop)
-                                                └─ else        → judge_verdict → END
+START → defence_opening → prosecution_opening → judge_direct ─┐
+                                                              │ (route_examination)
+                  ┌─ round ≤ max ── defence_examine ──────────┘
+                  │                       │
+                  │                 prosecution_examine
+                  │                       │
+                  └───────────────── judge_direct  (loop)
+                  else → defence_closing → prosecution_closing → verdict → END
 ```
 
-`route_round` is the entire termination policy in one place. The round counter is
-incremented inside `judge_observe`, so by the time we route it already reflects the
-round we are *about* to run. min 2 / max 3 rounds is enforced by `Settings`.
+`judge_direct` is the hub: it directs the next round, increments the examination
+counter, and `route_examination` reads that counter to loop or move to closing.
+The counter starts at 0; the first `judge_direct` (after openings) advances it to
+1, so the proceeding runs exactly `max_rounds` cross-examination rounds.
 """
 
 from __future__ import annotations
@@ -21,26 +27,28 @@ from .llm import LLMClient
 from .schemas import DebateState
 
 
-def route_round(state: DebateState) -> str:
-    """Loop back for another round, or proceed to the final verdict."""
-    return "proposer" if state["round"] <= state["max_rounds"] else "judge_verdict"
+def route_examination(state: DebateState) -> str:
+    """After the bench directs: open another examination round, or move to closing."""
+    return "defence_examine" if state["round"] <= state["max_rounds"] else "defence_closing"
 
 
 def build_graph(client: LLMClient, settings: Settings, log=None):
     nodes = build_nodes(client, settings, log=log)
     g = StateGraph(DebateState)
-    g.add_node("proposer", nodes["proposer"])
-    g.add_node("opposer", nodes["opposer"])
-    g.add_node("judge_observe", nodes["judge_observe"])
-    g.add_node("judge_verdict", nodes["judge_verdict"])
+    for name, fn in nodes.items():
+        g.add_node(name, fn)
 
-    g.add_edge(START, "proposer")
-    g.add_edge("proposer", "opposer")
-    g.add_edge("opposer", "judge_observe")
+    g.add_edge(START, "defence_opening")
+    g.add_edge("defence_opening", "prosecution_opening")
+    g.add_edge("prosecution_opening", "judge_direct")
     g.add_conditional_edges(
-        "judge_observe",
-        route_round,
-        {"proposer": "proposer", "judge_verdict": "judge_verdict"},
+        "judge_direct",
+        route_examination,
+        {"defence_examine": "defence_examine", "defence_closing": "defence_closing"},
     )
-    g.add_edge("judge_verdict", END)
+    g.add_edge("defence_examine", "prosecution_examine")
+    g.add_edge("prosecution_examine", "judge_direct")
+    g.add_edge("defence_closing", "prosecution_closing")
+    g.add_edge("prosecution_closing", "verdict")
+    g.add_edge("verdict", END)
     return g.compile()

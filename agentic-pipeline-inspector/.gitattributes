@@ -1,0 +1,5 @@
+# Force LF in the repo and on checkout so shell scripts run on the Linux target.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf

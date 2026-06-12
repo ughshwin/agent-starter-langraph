@@ -1,0 +1,11 @@
+langgraph==1.2.4
+pydantic==2.12.5
+ollama==0.6.1
+semgrep
+detect-secrets
+bandit
+pip-audit
+ruff
+pytest==9.0.2
+pytest-cov
+requests

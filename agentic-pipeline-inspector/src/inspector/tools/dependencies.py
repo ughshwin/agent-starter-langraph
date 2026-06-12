@@ -15,7 +15,7 @@ _NPM_SEVERITY = {
 }
 
 
-def _loads(stdout: str) -> Optional[dict]:
+def _loads(stdout: str):
     try:
         return json.loads(stdout)
     except (json.JSONDecodeError, TypeError):
@@ -34,8 +34,15 @@ def parse_pip_audit(stdout: str) -> list[Finding]:
     data = _loads(stdout)
     if not data:
         return []
+    # pip-audit emits either {"dependencies": [...]} or a bare [...] depending on
+    # version/flags. Normalise to a list of dependency dicts.
+    deps = data.get("dependencies", []) if isinstance(data, dict) else data
+    if not isinstance(deps, list):
+        return []
     out = []
-    for dep in data.get("dependencies", []):
+    for dep in deps:
+        if not isinstance(dep, dict):
+            continue
         name, version = dep.get("name", "?"), dep.get("version", "?")
         for v in dep.get("vulns", []):
             fix = ", ".join(v.get("fix_versions", []) or []) or "no fix listed"
@@ -49,7 +56,7 @@ def parse_pip_audit(stdout: str) -> list[Finding]:
 
 def parse_npm_audit(stdout: str) -> list[Finding]:
     data = _loads(stdout)
-    if not data:
+    if not isinstance(data, dict):
         return []
     out = []
     for name, info in (data.get("vulnerabilities") or {}).items():
@@ -83,5 +90,12 @@ def run_pip_audit(repo_path: str, settings: Settings):
 
 
 def run_npm_audit(repo_path: str, settings: Settings):
+    # npm audit requires a lockfile. If absent, optionally generate one in place
+    # (writes to the repo, hence opt-in) so the audit can run at all.
+    has_lock = any(os.path.exists(os.path.join(repo_path, f))
+                   for f in ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock"))
+    if not has_lock and settings.npm_generate_lockfile:
+        run_cli(["npm", "install", "--package-lock-only", "--ignore-scripts",
+                 "--no-audit", "--no-fund"], timeout=settings.tool_timeout, cwd=repo_path)
     r = run_cli(["npm", "audit", "--json"], timeout=settings.tool_timeout, cwd=repo_path)
     return parse_npm_audit(r.stdout), _exec("npm-audit", {"path": repo_path}, r)

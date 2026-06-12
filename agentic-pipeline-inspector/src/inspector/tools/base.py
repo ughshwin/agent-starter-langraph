@@ -8,6 +8,21 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+# Directories that are never the audited project's own code: dependency/vendor
+# trees, VCS, build output, caches. Scanning them produces huge volumes of junk
+# findings and slows every tool, so every wrapper excludes them.
+EXCLUDE_DIRS = [
+    "node_modules", ".venv", "venv", "env", ".git", ".hg", ".svn",
+    "build", "dist", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".tox", ".eggs", "site-packages", "vendor", ".next",
+]
+
+# A regex matching any path that lives under one of EXCLUDE_DIRS (for tools whose
+# exclude flag takes a regex, e.g. detect-secrets).
+EXCLUDE_REGEX = r"(^|/|\\)(" + "|".join(d.lstrip(".").replace(".", r"\.") for d in
+                                        dict.fromkeys(d.strip(".") for d in EXCLUDE_DIRS)) + r")(/|\\|$)"
+
+
 @dataclass(frozen=True)
 class ToolResult:
     ok: bool                 # process ran AND exited 0

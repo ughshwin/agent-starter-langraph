@@ -34,6 +34,18 @@ def test_parse_npm_audit_maps_high():
     assert fs[0].tool == "npm-audit"
 
 
+PIP_LIST_FORM = json.dumps([
+    {"name": "jinja2", "version": "2.0",
+     "vulns": [{"id": "PYSEC-2020-9", "fix_versions": ["2.11.3"], "description": "RCE"}]}
+])
+
+
+def test_parse_pip_audit_bare_list_form():
+    fs = parse_pip_audit(PIP_LIST_FORM)
+    assert fs[0].rule_id == "PYSEC-2020-9"
+    assert "jinja2" in fs[0].location
+
+
 def test_dependency_parsers_tolerate_garbage():
     assert parse_pip_audit("") == []
     assert parse_npm_audit("nope") == []

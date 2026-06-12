@@ -7,15 +7,23 @@ import os
 from .config import Settings
 from .llm import InspectorLLMError, LLMClient
 from .schemas import DepthPlan, InspectionState
+from .tools.base import EXCLUDE_DIRS
 
 _DEPTHS = {"deep", "standard", "skip"}
+_EXCLUDE = set(EXCLUDE_DIRS)
+
+
+def _walk_pruned(repo_path: str):
+    """os.walk that prunes vendor/build/VCS dirs in place, so big trees stay fast and
+    a vendored frontend can't skew language detection."""
+    for root, dirs, files in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in _EXCLUDE]
+        yield root, dirs, files
 
 
 def detect_language(repo_path: str) -> str:
     py = js = 0
-    for root, _dirs, files in os.walk(repo_path):
-        if any(skip in root for skip in (".git", "node_modules", ".venv")):
-            continue
+    for _root, _dirs, files in _walk_pruned(repo_path):
         for f in files:
             if f.endswith(".py"):
                 py += 1
@@ -30,9 +38,7 @@ def detect_language(repo_path: str) -> str:
 
 def detect_signals(repo_path: str) -> dict:
     entries = set()
-    for root, _dirs, files in os.walk(repo_path):
-        if ".git" in root:
-            continue
+    for _root, _dirs, files in _walk_pruned(repo_path):
         for f in files:
             entries.add(f.lower())
     return {

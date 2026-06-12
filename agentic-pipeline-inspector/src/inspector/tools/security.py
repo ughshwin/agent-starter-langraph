@@ -7,7 +7,14 @@ from typing import Optional
 
 from ..config import Settings
 from ..schemas import DEFAULT_EFFORT_HOURS, Dimension, Finding, Severity, ToolExecution
-from .base import run_cli
+from .base import EXCLUDE_DIRS, EXCLUDE_REGEX, run_cli
+
+
+def _semgrep_excludes() -> list[str]:
+    flags = []
+    for d in EXCLUDE_DIRS:
+        flags += ["--exclude", d]
+    return flags
 
 _SEMGREP_SEVERITY = {"ERROR": Severity.HIGH, "WARNING": Severity.MEDIUM, "INFO": Severity.LOW}
 _BANDIT_SEVERITY = {"HIGH": Severity.HIGH, "MEDIUM": Severity.MEDIUM, "LOW": Severity.LOW}
@@ -79,16 +86,22 @@ def _exec(tool, inp, result) -> ToolExecution:
 
 
 def run_semgrep(repo_path: str, settings: Settings):
-    r = run_cli(["semgrep", "--config", "auto", "--json", repo_path],
-                timeout=settings.tool_timeout)
+    cmd = (["semgrep", "scan", "--config", settings.semgrep_config, "--json",
+            "--metrics=off", "--quiet"]
+           + _semgrep_excludes() + [repo_path])
+    r = run_cli(cmd, timeout=settings.tool_timeout)
     return parse_semgrep(r.stdout), _exec("semgrep", {"path": repo_path}, r)
 
 
 def run_detect_secrets(repo_path: str, settings: Settings):
-    r = run_cli(["detect-secrets", "scan", repo_path], timeout=settings.tool_timeout)
+    r = run_cli(["detect-secrets", "scan", "--exclude-files", EXCLUDE_REGEX, repo_path],
+                timeout=settings.tool_timeout)
     return parse_detect_secrets(r.stdout), _exec("detect-secrets", {"path": repo_path}, r)
 
 
 def run_bandit(repo_path: str, settings: Settings):
-    r = run_cli(["bandit", "-r", repo_path, "-f", "json"], timeout=settings.tool_timeout)
+    # bandit -x takes comma-separated glob patterns to prune from the recursive walk.
+    excludes = ",".join(f"*/{d}/*" for d in EXCLUDE_DIRS)
+    r = run_cli(["bandit", "-r", repo_path, "-f", "json", "-q", "-x", excludes],
+                timeout=settings.tool_timeout)
     return parse_bandit(r.stdout), _exec("bandit", {"path": repo_path}, r)

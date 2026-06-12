@@ -1,0 +1,24 @@
+# SonarQube Community server for the code-quality dimension.
+#   docker compose -f docker-compose.sonar.yml up -d
+# Then open http://localhost:9000 (admin/admin), create a user token, and export:
+#   export SONAR_URL=http://localhost:9000
+#   export SONAR_TOKEN=<the token>
+#   export SONAR_PROJECT_KEY=inspector-target
+# Uses the embedded database — fine for point-in-time audits, not for production Sonar.
+services:
+  sonarqube:
+    image: sonarqube:community
+    ports:
+      - "9000:9000"
+    environment:
+      # The embedded H2 DB triggers an ES bootstrap check; disable it for single-node audit use.
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:

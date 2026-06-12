@@ -6,7 +6,7 @@ from typing import Optional
 
 from ..config import Settings
 from ..schemas import DEFAULT_EFFORT_HOURS, Dimension, Finding, Severity, ToolExecution
-from .base import run_cli
+from .base import EXCLUDE_DIRS, run_cli
 
 _TRIVY_SEVERITY = {
     "CRITICAL": Severity.CRITICAL, "HIGH": Severity.HIGH,
@@ -46,12 +46,20 @@ def parse_trivy(stdout: str) -> list[Finding]:
             sev = _TRIVY_SEVERITY.get(m.get("Severity", "UNKNOWN"), Severity.LOW)
             out.append(_f(sev, target, m.get("Title", ""), m.get("ID"),
                           recommendation=m.get("Resolution", "")))
+        for s in res.get("Secrets", []) or []:
+            sev = _TRIVY_SEVERITY.get(s.get("Severity", "UNKNOWN"), Severity.HIGH)
+            loc = f"{target}:{s.get('StartLine', 0)}"
+            out.append(_f(sev, loc, s.get("Title", "exposed secret"), s.get("RuleID"),
+                          recommendation="Remove the secret and rotate the credential."))
     return out
 
 
 def run_trivy(repo_path: str, settings: Settings):
+    skip = []
+    for d in EXCLUDE_DIRS:
+        skip += ["--skip-dirs", d]
     r = run_cli(["trivy", "fs", "--scanners", "vuln,misconfig,secret",
-                 "--format", "json", repo_path], timeout=settings.tool_timeout)
+                 "--format", "json", *skip, repo_path], timeout=settings.tool_timeout)
     exec_ = ToolExecution(tool_name="trivy", input={"path": repo_path},
                           success=(r.error is None), duration_ms=r.duration_ms,
                           error=r.error)
